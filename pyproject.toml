@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aurarouter-openai"
+version = "0.5.1"
+description = "OpenAI & Azure OpenAI provider for AuraRouter — exposes GPT and o-series models as an MCP provider server."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [
+    { name = "AuraCore Dynamics Inc." },
+]
+keywords = ["aurarouter", "openai", "azure-openai", "gpt", "mcp", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "openai>=1.60",
+    "httpx>=0.27",
+    "mcp[cli]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio",
+    "respx>=0.21",
+]
+
+[project.entry-points."aurarouter.providers"]
+openai = "aurarouter_openai:get_provider_metadata"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+asyncio_mode = "auto"
+
