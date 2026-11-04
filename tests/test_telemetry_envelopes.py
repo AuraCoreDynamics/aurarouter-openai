@@ -123,3 +123,41 @@ class TestCrossMcpOpenAITelemetry:
         with pytest.raises(ProviderTransientError) as tr_err:
             mcp_prov.generate_with_usage("test 502")
         assert tr_err.value.status_code == 502
+
+    @respx.mock
+    def test_openai_529_and_insufficient_quota_mapped_to_rate_limit(self):
+        oa_prov = OpenAIProvider(api_key="sk-test")
+        oa_prov._client = None
+        mcp_prov = _wire_inprocess_mcp_provider(oa_prov, model_name="gpt-4o")
+
+        # 1. HTTP 529 Overloaded
+        respx.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(529, json={"error": {"message": "OpenAI engine is overloaded"}})
+        )
+        with pytest.raises(RateLimitExceededError) as rl_529:
+            mcp_prov.generate_with_usage("test 529")
+        assert rl_529.value.snapshot is not None
+        assert rl_529.value.snapshot.retry_after_s == pytest.approx(5.0)
+
+        # 2. insufficient_quota code with HTTP 429
+        respx.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                429,
+                json={"error": {"message": "You exceeded your current quota", "code": "insufficient_quota"}},
+            )
+        )
+        with pytest.raises(RateLimitExceededError) as rl_quota:
+            mcp_prov.generate_with_usage("test quota")
+        assert rl_quota.value.snapshot.is_daily_quota is True
+
+    def test_openai_header_filter_ignores_x_request_id(self):
+        oa_prov = OpenAIProvider(api_key="sk-test")
+        raw_headers = {
+            "content-type": "application/json",
+            "date": "Tue, 03 Nov 2026 12:00:00 GMT",
+            "x-request-id": "req-999888777",
+            "server": "cloudflare",
+        }
+        filtered = oa_prov._extract_ratelimit_headers(raw_headers)
+        assert "x-request-id" not in filtered
+        assert not filtered

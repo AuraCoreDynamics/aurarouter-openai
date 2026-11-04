@@ -75,16 +75,13 @@ class OpenAITransientError(Exception):
 
 
 def _extract_ratelimit_headers(raw_headers: Any) -> dict[str, str]:
-    """Filter or normalize response headers relevant to rate-limit tracking."""
+    """Filter or normalize response headers relevant to rate-limit tracking (QA 3.3)."""
     if raw_headers is None or not hasattr(raw_headers, "items"):
         return {}
     kept: dict[str, str] = {}
     for k, v in raw_headers.items():
         kl = str(k).lower()
-        if (
-            "ratelimit" in kl
-            or kl in ("retry-after", "retry-after-ms", "x-request-id")
-        ):
+        if "ratelimit" in kl or kl in ("retry-after", "retry-after-ms"):
             kept[str(k)] = str(v)
     return kept
 
@@ -100,6 +97,8 @@ class OpenAIProvider:
     is explicitly injected) and falls back cleanly to ``httpx`` against the
     documented REST endpoints so zero-SDK environments remain operational.
     """
+
+    _extract_ratelimit_headers = staticmethod(_extract_ratelimit_headers)
 
     def __init__(
         self,
@@ -703,8 +702,17 @@ class OpenAIProvider:
             pass
 
         msg = f"HTTP {status}: {body_text[:500]}" if body_text else f"HTTP {status}"
-        if status == 429:
-            raise OpenAIRateLimitError(msg, headers=rl_headers)
+        err_code_l = err_code.lower()
+        if status in (429, 529) or err_code_l in ("rate_limit_exceeded", "insufficient_quota"):
+            hdrs_out = dict(rl_headers)
+            retry_s: float | None = None
+            if err_code_l == "insufficient_quota":
+                hdrs_out["is_daily_quota"] = "true"  # type: ignore[assignment]
+                retry_s = 3600.0
+            elif status == 529 and not any(k.lower().startswith("retry-after") for k in hdrs_out):
+                hdrs_out["retry-after"] = "5"
+                retry_s = 5.0
+            raise OpenAIRateLimitError(msg, headers=hdrs_out, retry_after_s=retry_s)
         if status in (400, 413, 422):
             combined = f"{err_code} {body_text}".lower()
             if any(kw in combined for kw in _OPENAI_CTX_KEYWORDS):
@@ -719,11 +727,21 @@ class OpenAIProvider:
         status = getattr(exc, "status_code", None)
         resp = getattr(exc, "response", None)
         hdrs = _extract_ratelimit_headers(getattr(resp, "headers", None))
-
-        if cls_name == "RateLimitError" or status == 429:
-            raise OpenAIRateLimitError(str(exc), headers=hdrs) from exc
-
         err_code = str(getattr(exc, "code", "") or "")
+        err_code_l = err_code.lower()
+
+        if (
+            cls_name == "RateLimitError"
+            or status in (429, 529)
+            or err_code_l in ("rate_limit_exceeded", "insufficient_quota")
+        ):
+            retry_s: float | None = None
+            if err_code_l == "insufficient_quota":
+                retry_s = 3600.0
+            elif status == 529 and not any(k.lower().startswith("retry-after") for k in hdrs):
+                hdrs["retry-after"] = "5"
+                retry_s = 5.0
+            raise OpenAIRateLimitError(str(exc), headers=hdrs, retry_after_s=retry_s) from exc
         lower = f"{err_code} {exc}".lower()
         if cls_name == "BadRequestError" or status in (400, 413, 422):
             if any(kw in lower for kw in _OPENAI_CTX_KEYWORDS):
