@@ -15,7 +15,10 @@ from aurarouter_openai.provider import (
     OpenAIRateLimitError,
     OpenAITransientError,
 )
-from tests.conftest import make_mock_chat_completion
+try:
+    from conftest import make_mock_chat_completion
+except ImportError:
+    from tests.conftest import make_mock_chat_completion
 
 
 class TestModelCatalog:
