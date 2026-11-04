@@ -107,6 +107,19 @@ models:
 
 ---
 
+## Testing & Verification
+
+The test suite supports standalone execution and monorepo runner integration:
+
+```bash
+pytest tests/ -v
+```
+
+- **Unit & Telemetry Suite**: Verifies client lifecycle, dialect transformation, rate-limit header parsing, and error encapsulation.
+- **Canary Suite**: Includes `@pytest.mark.live_vendor` canaries with strict token caps (`max_tokens=16`) to verify live OpenAI Platform connectivity when `OPENAI_API_KEY` is present.
+
+---
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
