@@ -197,6 +197,92 @@ class OpenAIProvider:
     # Public API
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _extract_img_url(img: Any) -> str:
+        if isinstance(img, dict):
+            if img.get("data_uri"):
+                return str(img["data_uri"])
+            if img.get("url"):
+                return str(img["url"])
+            b64 = img.get("data") or img.get("base64") or img.get("b64_json")
+            if b64:
+                mime = img.get("mime_type") or "image/png"
+                return f"data:{mime};base64,{b64}"
+        elif isinstance(img, str):
+            return img if (img.startswith("data:") or img.startswith("http")) else f"data:image/png;base64,{img}"
+        return ""
+
+    @classmethod
+    def _format_chat_content(cls, raw_content: Any, images: list[dict[str, Any]] | None) -> tuple[Any, str]:
+        """Return ``(formatted_content_for_chat_api, plain_text_for_json_keyword_check)``."""
+        if not images and not isinstance(raw_content, list):
+            text = "" if raw_content is None else str(raw_content)
+            return text, text
+
+        blocks: list[dict[str, Any]] = []
+        texts: list[str] = []
+        if isinstance(raw_content, list):
+            for item in raw_content:
+                if isinstance(item, dict):
+                    blocks.append(item)
+                    if item.get("type") == "text":
+                        texts.append(str(item.get("text", "")))
+                else:
+                    s = str(item)
+                    texts.append(s)
+                    blocks.append({"type": "text", "text": s})
+        elif raw_content:
+            s = str(raw_content)
+            texts.append(s)
+            blocks.append({"type": "text", "text": s})
+
+        for img in images or []:
+            url = cls._extract_img_url(img)
+            if url:
+                blocks.append({"type": "image_url", "image_url": {"url": url}})
+
+        return blocks, "\n".join(texts)
+
+    @classmethod
+    def _format_responses_content(cls, raw_content: Any, images: list[dict[str, Any]] | None) -> tuple[Any, str]:
+        """Return ``(formatted_content_for_responses_api, plain_text)``."""
+        if not images and not isinstance(raw_content, list):
+            text = "" if raw_content is None else str(raw_content)
+            return text, text
+
+        blocks: list[dict[str, Any]] = []
+        texts: list[str] = []
+        if isinstance(raw_content, list):
+            for item in raw_content:
+                if not isinstance(item, dict):
+                    s = str(item)
+                    texts.append(s)
+                    blocks.append({"type": "input_text", "text": s})
+                    continue
+                itype = item.get("type")
+                if itype in ("text", "input_text"):
+                    s = str(item.get("text", ""))
+                    texts.append(s)
+                    blocks.append({"type": "input_text", "text": s})
+                elif itype == "image_url":
+                    img_obj = item.get("image_url", {})
+                    url = img_obj.get("url", "") if isinstance(img_obj, dict) else str(img_obj)
+                    if url:
+                        blocks.append({"type": "input_image", "image_url": url})
+                elif itype == "input_image":
+                    blocks.append(item)
+        elif raw_content:
+            s = str(raw_content)
+            texts.append(s)
+            blocks.append({"type": "input_text", "text": s})
+
+        for img in images or []:
+            url = cls._extract_img_url(img)
+            if url:
+                blocks.append({"type": "input_image", "image_url": url})
+
+        return blocks, "\n".join(texts)
+
     def generate(
         self,
         prompt: str,
@@ -209,10 +295,14 @@ class OpenAIProvider:
         reasoning_effort: str = "",
         prompt_cache_key: str = "",
         api_mode: str = "",
+        images: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Single-shot text generation."""
+        """Single-shot text or multimodal generation."""
+        user_msg: dict[str, Any] = {"role": "user", "content": prompt}
+        if images:
+            user_msg["images"] = images
         return self.generate_with_history(
-            messages=[{"role": "user", "content": prompt}],
+            messages=[user_msg],
             system_prompt="",
             model=model,
             json_mode=json_mode,
@@ -354,13 +444,15 @@ class OpenAIProvider:
 
         for msg in messages:
             role = str(msg.get("role", "user"))
-            content = str(msg.get("content", ""))
-            all_texts.append(content)
+            formatted_content, plain_text = OpenAIProvider._format_chat_content(
+                msg.get("content", ""), msg.get("images")
+            )
+            all_texts.append(plain_text)
             if role in ("system", "developer"):
-                if content:
-                    sys_parts.append(content)
+                if plain_text:
+                    sys_parts.append(plain_text)
                 continue
-            formatted_msgs.append({"role": role, "content": content})
+            formatted_msgs.append({"role": role, "content": formatted_content})
 
         if json_mode and response_schema is None:
             combined_so_far = sys_parts + all_texts
@@ -425,13 +517,15 @@ class OpenAIProvider:
 
         for msg in messages:
             role = str(msg.get("role", "user"))
-            content = str(msg.get("content", ""))
-            all_texts.append(content)
+            formatted_content, plain_text = OpenAIProvider._format_responses_content(
+                msg.get("content", ""), msg.get("images")
+            )
+            all_texts.append(plain_text)
             if role in ("system", "developer"):
-                if content:
-                    instructions_parts.append(content)
+                if plain_text:
+                    instructions_parts.append(plain_text)
                 continue
-            input_items.append({"role": role, "content": content})
+            input_items.append({"role": role, "content": formatted_content})
 
         if json_mode and response_schema is None:
             if not _contains_json_keyword(instructions_parts + all_texts):

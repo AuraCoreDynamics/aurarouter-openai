@@ -87,20 +87,23 @@ def create_server(
         reasoning_effort: str = "",
         prompt_cache_key: str = "",
         api_mode: str = "",
+        images: list[dict[str, Any]] | None = None,
     ) -> str:
-        """Single-shot text generation via OpenAI or Azure OpenAI."""
+        """Single-shot text or multimodal generation via OpenAI or Azure OpenAI."""
         try:
             prov = _get_provider()
-            result = prov.generate(
-                prompt,
-                model=model,
-                json_mode=json_mode,
-                response_schema=response_schema,
-                max_tokens=max_tokens,
-                reasoning_effort=reasoning_effort,
-                prompt_cache_key=prompt_cache_key,
-                api_mode=api_mode,
-            )
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "json_mode": json_mode,
+                "response_schema": response_schema,
+                "max_tokens": max_tokens,
+                "reasoning_effort": reasoning_effort,
+                "prompt_cache_key": prompt_cache_key,
+                "api_mode": api_mode,
+            }
+            if images:
+                kwargs["images"] = images
+            result = prov.generate(prompt, **kwargs)
             return json.dumps(result)
         except (OpenAIRateLimitError, OpenAIContextLengthError, OpenAITransientError) as exc:
             return _serialize_error(exc)
